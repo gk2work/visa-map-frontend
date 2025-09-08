@@ -70,14 +70,11 @@ export default function VisaMonkApp() {
             case 2:
               return <SelectUserType onNext={handleUserTypeNext} onBack={handleBack} />;
             case 3:
-              return <SelectVisaType onNext={handleVisaTypeNext} onBack={handleBack} />;
+              return <SelectVisaType onNext={handleVisaTypeNext} onBack={handleBack} flowState={flowState} />;
             case 4:
-              // Check if this is the supported India → UK flow
-              if (flowState.fromCountry === "IN" && flowState.toCountry === "GB") {
-                return <VisaDetails onBack={handleBack} userFormData={userFormData} personalizationData={personalizationData} />;
-              } else {
-                return <VisaDetailsComingSoon onBack={handleBack} flowState={flowState} />;
-              }
+              // Since route validation is now handled in SelectCountries, 
+              // we can directly show VisaDetails for supported routes
+              return <VisaDetails onBack={handleBack} userFormData={userFormData} personalizationData={personalizationData} />;
             default:
               return <SelectCountries onNext={handleCountriesNext} />;
           }

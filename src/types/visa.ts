@@ -1,7 +1,22 @@
 export interface Country {
+  _id?: string;
   code: string;
   name: string;
   flag: string;
+  isOriginCountry?: boolean;
+  isDestinationCountry?: boolean;
+  supportedUserTypes?: string[];
+  dialingCode?: string;
+  currency?: {
+    code: string;
+    symbol: string;
+    name: string;
+  };
+  metadata?: {
+    region: string;
+    subRegion?: string;
+    capital?: string;
+  };
 }
 
 export interface UserType {
