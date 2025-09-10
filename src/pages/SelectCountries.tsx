@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ArrowRight, ArrowLeftRight, X, MapPin, Plane } from "lucide-react";
+import { useState, useEffect } from "react";
+import { ArrowRight, ArrowLeftRight, X, MapPin, Plane, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,9 +16,10 @@ import { PlaceholderSection } from "@/components/PlaceholderSection";
 import { ComingSoonModal } from "@/components/ComingSoonModal";
 import { Country, UserFormData } from "@/types/visa";
 import { Toaster } from "@/components/ui/sonner";
-import { saveProgress } from "@/lib/api";
+import { saveProgress, getOriginCountries, getDestinationCountries, checkRouteSupport } from "@/lib/api";
 
-const countries: Country[] = [
+// Fallback countries for when API is not available
+const fallbackCountries: Country[] = [
   { code: "IN", name: "India", flag: "🇮🇳" },
   { code: "NG", name: "Nigeria", flag: "🇳🇬" },
   { code: "GB", name: "United Kingdom", flag: "🇬🇧" },
@@ -33,7 +34,8 @@ const countries: Country[] = [
   { code: "CH", name: "Switzerland", flag: "🇨🇭" },
 ];
 
-const dialingCodes = [
+// Fallback dialing codes
+const fallbackDialingCodes = [
   { code: "+1", country: "United States", flag: "🇺🇸" },
   { code: "+1", country: "Canada", flag: "🇨🇦" },
   { code: "+44", country: "United Kingdom", flag: "🇬🇧" },
@@ -66,6 +68,59 @@ export default function SelectCountries({ onNext }: SelectCountriesProps) {
   });
   const [formError, setFormError] = useState<string>("");
   const [emailError, setEmailError] = useState<string>("");
+  
+  // Dynamic data state
+  const [originCountries, setOriginCountries] = useState<Country[]>([]);
+  const [destinationCountries, setDestinationCountries] = useState<Country[]>([]);
+  const [dialingCodes, setDialingCodes] = useState(fallbackDialingCodes);
+  const [loading, setLoading] = useState(true);
+  const [checkingRoute, setCheckingRoute] = useState(false);
+
+  // Load countries on component mount
+  useEffect(() => {
+    const loadCountries = async () => {
+      try {
+        setLoading(true);
+        
+        // Load origin and destination countries in parallel
+        const [origins, destinations] = await Promise.all([
+          getOriginCountries(),
+          getDestinationCountries()
+        ]);
+        
+        setOriginCountries(origins);
+        setDestinationCountries(destinations);
+        
+        // Create dialing codes from countries data
+        const allCountries = [...origins, ...destinations];
+        const uniqueDialingCodes = allCountries
+          .filter(country => country.dialingCode)
+          .map(country => ({
+            code: country.dialingCode!,
+            country: country.name,
+            flag: country.flag
+          }))
+          .filter((code, index, self) => 
+            index === self.findIndex(c => c.code === code.code)
+          );
+        
+        if (uniqueDialingCodes.length > 0) {
+          setDialingCodes(uniqueDialingCodes);
+        }
+        
+      } catch (error) {
+        console.error('Failed to load countries:', error);
+        // Use fallback data
+        setOriginCountries(fallbackCountries.filter(c => c.code === "IN" || c.code === "NG"));
+        setDestinationCountries(fallbackCountries.filter(c => c.code !== "IN" && c.code !== "NG"));
+        toast.error("Failed to load countries. Using offline data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadCountries();
+  }, []);
 
   const handleSwap = () => {
     const temp = fromCountry;
@@ -108,7 +163,7 @@ export default function SelectCountries({ onNext }: SelectCountriesProps) {
     setFormData(prev => ({ ...prev, mobile: phone }));
   };
 
-  const handleFormSubmit = () => {
+  const handleFormSubmit = async () => {
     let hasErrors = false;
     
     if (!formData.firstName.trim() || !formData.lastName.trim()) {
@@ -145,21 +200,40 @@ export default function SelectCountries({ onNext }: SelectCountriesProps) {
       saveProgress(progressData);
     }
     
-    // Check if this is a supported country combination
-    const isSupported = fromCountry === "IN" && toCountry === "GB";
-    
-    if (!isSupported) {
-      setComingSoonCountries({from: fromCountry, to: toCountry});
-      setShowComingSoon(true);
-      setShowForm(false);
-      return;
+    // Check if this route is supported dynamically
+    setCheckingRoute(true);
+    try {
+      const isSupported = await checkRouteSupport(fromCountry, toCountry);
+      
+      if (!isSupported) {
+        setComingSoonCountries({from: fromCountry, to: toCountry});
+        setShowComingSoon(true);
+        setShowForm(false);
+        return;
+      }
+      
+      onNext(fromCountry, toCountry, formData);
+    } catch (error) {
+      console.error('Failed to check route support:', error);
+      // Fallback: only support IN->GB for now
+      const isSupported = fromCountry === "IN" && toCountry === "GB";
+      
+      if (!isSupported) {
+        setComingSoonCountries({from: fromCountry, to: toCountry});
+        setShowComingSoon(true);
+        setShowForm(false);
+        return;
+      }
+      
+      onNext(fromCountry, toCountry, formData);
+    } finally {
+      setCheckingRoute(false);
     }
-    
-    onNext(fromCountry, toCountry, formData);
   };
 
   const getCountryDisplayName = (code: string) => {
-    const country = countries.find(c => c.code === code);
+    const allCountries = [...originCountries, ...destinationCountries];
+    const country = allCountries.find(c => c.code === code);
     if (country && country.code === "GB") {
       return "UK";
     }
@@ -167,7 +241,8 @@ export default function SelectCountries({ onNext }: SelectCountriesProps) {
   };
 
   const getCountryFlag = (code: string) => {
-    return countries.find(c => c.code === code)?.flag || "";
+    const allCountries = [...originCountries, ...destinationCountries];
+    return allCountries.find(c => c.code === code)?.flag || "";
   };
 
   const validatePhone = (phone: string) => {
@@ -186,12 +261,14 @@ export default function SelectCountries({ onNext }: SelectCountriesProps) {
   };
 
   const getDepartureCountries = () => {
-    return countries.filter(country => country.code === "IN" || country.code === "NG");
+    return originCountries.length > 0 ? originCountries : fallbackCountries.filter(country => country.code === "IN" || country.code === "NG");
   };
 
-  const getDestinationCountries = () => {
-    if (!fromCountry) return countries;
-    return countries.filter(country => country.code !== fromCountry);
+  const getDestinationCountriesForSelection = () => {
+    if (!fromCountry) return destinationCountries.length > 0 ? destinationCountries : fallbackCountries;
+    return destinationCountries.length > 0 
+      ? destinationCountries.filter(country => country.code !== fromCountry)
+      : fallbackCountries.filter(country => country.code !== fromCountry);
   };
 
   return (
@@ -239,18 +316,25 @@ export default function SelectCountries({ onNext }: SelectCountriesProps) {
                       <SelectValue placeholder="🌍 Select your departure country" />
                     </SelectTrigger>
                     <SelectContent className="bg-card/95 backdrop-blur-sm border-border/50">
-                      {getDepartureCountries().map((country) => (
-                        <SelectItem 
-                          key={country.code} 
-                          value={country.code}
-                          className="hover:bg-primary/5 transition-colors duration-200"
-                        >
-                          <div className="flex items-center gap-3">
-                            <span className="text-2xl">{country.flag}</span>
-                            <span className="font-medium">{country.code === "GB" ? "UK" : country.name}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
+                      {loading ? (
+                        <div className="flex items-center justify-center p-4">
+                          <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                          <span className="text-sm text-muted-foreground">Loading countries...</span>
+                        </div>
+                      ) : (
+                        getDepartureCountries().map((country) => (
+                          <SelectItem 
+                            key={country.code} 
+                            value={country.code}
+                            className="hover:bg-primary/5 transition-colors duration-200"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="text-2xl">{country.flag}</span>
+                              <span className="font-medium">{country.code === "GB" ? "UK" : country.name}</span>
+                            </div>
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
@@ -279,18 +363,25 @@ export default function SelectCountries({ onNext }: SelectCountriesProps) {
                       <SelectValue placeholder="🎯 Select your destination country" />
                     </SelectTrigger>
                     <SelectContent className="bg-card/95 backdrop-blur-sm border-border/50">
-                      {getDestinationCountries().map((country) => (
-                        <SelectItem 
-                          key={country.code} 
-                          value={country.code}
-                          className="hover:bg-primary/5 transition-colors duration-200"
-                        >
-                          <div className="flex items-center gap-3">
-                            <span className="text-2xl">{country.flag}</span>
-                            <span className="font-medium">{country.code === "GB" ? "UK" : country.name}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
+                      {loading ? (
+                        <div className="flex items-center justify-center p-4">
+                          <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                          <span className="text-sm text-muted-foreground">Loading countries...</span>
+                        </div>
+                      ) : (
+                        getDestinationCountriesForSelection().map((country) => (
+                          <SelectItem 
+                            key={country.code} 
+                            value={country.code}
+                            className="hover:bg-primary/5 transition-colors duration-200"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="text-2xl">{country.flag}</span>
+                              <span className="font-medium">{country.code === "GB" ? "UK" : country.name}</span>
+                            </div>
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
@@ -306,10 +397,19 @@ export default function SelectCountries({ onNext }: SelectCountriesProps) {
                 onClick={handleContinue}
                 size="lg"
                 className="w-full h-14 text-lg font-semibold bg-gradient-hero hover:bg-gradient-hero/90 text-white shadow-branded hover:shadow-lg transition-all duration-300 rounded-xl"
-                disabled={!fromCountry || !toCountry}
+                disabled={!fromCountry || !toCountry || loading}
               >
-                Continue Your Journey
-                <ArrowRight className="ml-3 h-6 w-6" />
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-3 h-6 w-6 animate-spin" />
+                    Loading...
+                  </>
+                ) : (
+                  <>
+                    Continue Your Journey
+                    <ArrowRight className="ml-3 h-6 w-6" />
+                  </>
+                )}
               </Button>
             </CardContent>
           </Card>
@@ -428,9 +528,19 @@ export default function SelectCountries({ onNext }: SelectCountriesProps) {
                 <Button
                   onClick={handleFormSubmit}
                   className="flex-1 h-11 bg-gradient-hero hover:bg-gradient-hero/90 text-white"
+                  disabled={checkingRoute}
                 >
-                  Register & Continue
-                  <ArrowRight className="ml-2 h-4 w-4" />
+                  {checkingRoute ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Checking Route...
+                    </>
+                  ) : (
+                    <>
+                      Register & Continue
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </>
+                  )}
                 </Button>
               </div>
             </CardContent>

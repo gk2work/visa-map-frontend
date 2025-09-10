@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ArrowRight, Clock, DollarSign, Calendar, Info } from "lucide-react";
+import { useState, useEffect } from "react";
+import { ArrowRight, Clock, DollarSign, Calendar, Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,6 +13,7 @@ import { ProgressIndicator } from "@/components/ProgressIndicator";
 import { VisaType, PersonalizationData } from "@/types/visa";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { getVisaTypesByRoute, VisaType as ApiVisaType } from "@/lib/api";
 
 const studentVisaTypes: VisaType[] = [
   {
@@ -52,14 +53,140 @@ const studentVisaTypes: VisaType[] = [
 interface SelectVisaTypeProps {
   onNext: (visaType: string, personalization: PersonalizationData) => void;
   onBack: () => void;
+  flowState: {
+    fromCountry: string | null;
+    toCountry: string | null;
+    userType: string | null;
+  };
 }
 
-export default function SelectVisaType({ onNext, onBack }: SelectVisaTypeProps) {
+export default function SelectVisaType({ onNext, onBack, flowState }: SelectVisaTypeProps) {
   const [showPersonalizationModal, setShowPersonalizationModal] = useState(false);
   const [showCASInfoModal, setShowCASInfoModal] = useState(false);
   const [selectedVisaType, setSelectedVisaType] = useState<string>("");
   const [hasCAS, setHasCAS] = useState<string>("");
   const [casDate, setCasDate] = useState<Date>();
+  
+  // Dynamic visa types state
+  const [visaTypes, setVisaTypes] = useState<ApiVisaType[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>("");
+
+  // Load visa types based on route and user type
+  useEffect(() => {
+    const loadVisaTypes = async () => {
+      if (!flowState.fromCountry || !flowState.toCountry || !flowState.userType) {
+        setError("Missing route or user type information");
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        setError("");
+        
+        const apiVisaTypes = await getVisaTypesByRoute(
+          flowState.fromCountry, 
+          flowState.toCountry, 
+          flowState.userType
+        );
+        
+        setVisaTypes(apiVisaTypes);
+        
+        // If no visa types found from API, use fallback data
+        if (apiVisaTypes.length === 0) {
+          console.warn('No visa types found from API, using fallback data');
+          // Convert fallback data to API format
+          const fallbackApiTypes: ApiVisaType[] = studentVisaTypes.map(visa => ({
+            _id: visa.id,
+            name: visa.name,
+            code: visa.id,
+            category: visa.category,
+            originCountry: flowState.fromCountry!,
+            destinationCountry: flowState.toCountry!,
+            description: visa.description,
+            overview: visa.description,
+            eligibility: [],
+            processingTime: {
+              min: 3,
+              max: 6,
+              unit: 'weeks'
+            },
+            fees: {
+              visaFee: {
+                amount: parseInt(visa.fee.replace(/[£$]/g, '')),
+                currency: 'GBP'
+              }
+            },
+            requirements: {
+              documents: []
+            },
+            applicationProcess: {
+              steps: [],
+              applicationMethod: 'online',
+              interviewRequired: false
+            },
+            officialLinks: [],
+            commonMistakes: [],
+            personalization: {
+              casRequired: visa.id === 'student-visa',
+              atasRequired: false,
+              tbTestRequired: false
+            }
+          }));
+          setVisaTypes(fallbackApiTypes);
+        }
+        
+      } catch (error) {
+        console.error('Failed to load visa types:', error);
+        setError("Failed to load visa types. Please try again.");
+        
+        // Use fallback data on error
+        const fallbackApiTypes: ApiVisaType[] = studentVisaTypes.map(visa => ({
+          _id: visa.id,
+          name: visa.name,
+          code: visa.id,
+          category: visa.category,
+          originCountry: flowState.fromCountry!,
+          destinationCountry: flowState.toCountry!,
+          description: visa.description,
+          overview: visa.description,
+          eligibility: [],
+          processingTime: {
+            min: 3,
+            max: 6,
+            unit: 'weeks'
+          },
+          fees: {
+            visaFee: {
+              amount: parseInt(visa.fee.replace(/[£$]/g, '')),
+              currency: 'GBP'
+            }
+          },
+          requirements: {
+            documents: []
+          },
+          applicationProcess: {
+            steps: [],
+            applicationMethod: 'online',
+            interviewRequired: false
+          },
+          officialLinks: [],
+          commonMistakes: [],
+          personalization: {
+            casRequired: visa.id === 'student-visa',
+            atasRequired: false,
+            tbTestRequired: false
+          }
+        }));
+        setVisaTypes(fallbackApiTypes);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadVisaTypes();
+  }, [flowState.fromCountry, flowState.toCountry, flowState.userType]);
 
   const handleVisaSelection = (visaId: string) => {
     setSelectedVisaType(visaId);
@@ -110,70 +237,96 @@ export default function SelectVisaType({ onNext, onBack }: SelectVisaTypeProps) 
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6 mb-6 lg:mb-8">
-            {studentVisaTypes.map((visa) => {
-              const isPrimary = visa.id === "student-visa";
-              const isDisabled = !isPrimary;
+            {loading ? (
+              <div className="col-span-2 flex items-center justify-center py-12">
+                <div className="flex items-center gap-3">
+                  <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                  <span className="text-lg text-muted-foreground">Loading visa types...</span>
+                </div>
+              </div>
+            ) : error ? (
+              <div className="col-span-2 flex items-center justify-center py-12">
+                <div className="text-center">
+                  <p className="text-destructive mb-4">{error}</p>
+                  <Button onClick={() => window.location.reload()} variant="outline">
+                    Try Again
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              visaTypes.map((visa) => {
+                const isPrimary = visa.code === "student-visa" || visa.category === "student";
+                const isDisabled = false; // All visa types are now enabled
+                
+                // Format processing time
+                const processingTime = visa.processingTime.min === visa.processingTime.max 
+                  ? `${visa.processingTime.min} ${visa.processingTime.unit}`
+                  : `${visa.processingTime.min}-${visa.processingTime.max} ${visa.processingTime.unit}`;
+                
+                // Format fee
+                const fee = `${visa.fees.visaFee.currency} ${visa.fees.visaFee.amount}`;
               
-              return (
-                <Button
-                  key={visa.id}
-                  variant="card"
-                  onClick={() => !isDisabled && handleVisaSelection(visa.id)}
-                  disabled={isDisabled}
-                  className={`relative transition-all duration-300 p-4 lg:p-6 h-auto ${
-                    isDisabled 
-                      ? "opacity-60 cursor-not-allowed hover:ring-0 hover:shadow-none hover:scale-100" 
-                      : "hover:ring-2 hover:ring-primary hover:shadow-branded hover:scale-105"
-                  } ${
-                    isPrimary 
-                      ? "border-primary/30 bg-gradient-to-br from-primary/5 to-accent/5" 
-                      : ""
-                  }`}
-                >
-                  <div className="flex flex-col space-y-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <h3 className="text-lg lg:text-xl font-semibold text-foreground mb-2">
-                          {visa.name}
-                        </h3>
-                        <div className="flex flex-wrap gap-2 mb-3">
-                          <Badge 
-                            variant={isPrimary ? "default" : "secondary"}
-                          >
-                            {visa.category}
-                          </Badge>
-                          {isDisabled && (
-                            <Badge variant="outline" className="text-muted-foreground">
-                              Coming Soon
+                return (
+                  <Button
+                    key={visa._id}
+                    variant="card"
+                    onClick={() => !isDisabled && handleVisaSelection(visa._id)}
+                    disabled={isDisabled}
+                    className={`relative transition-all duration-300 p-4 lg:p-6 h-auto ${
+                      isDisabled 
+                        ? "opacity-60 cursor-not-allowed hover:ring-0 hover:shadow-none hover:scale-100" 
+                        : "hover:ring-2 hover:ring-primary hover:shadow-branded hover:scale-105"
+                    } ${
+                      isPrimary 
+                        ? "border-primary/30 bg-gradient-to-br from-primary/5 to-accent/5" 
+                        : ""
+                    }`}
+                  >
+                    <div className="flex flex-col space-y-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h3 className="text-lg lg:text-xl font-semibold text-foreground mb-2">
+                            {visa.name}
+                          </h3>
+                          <div className="flex flex-wrap gap-2 mb-3">
+                            <Badge 
+                              variant={isPrimary ? "default" : "secondary"}
+                            >
+                              {visa.category}
                             </Badge>
-                          )}
+                            {isDisabled && (
+                              <Badge variant="outline" className="text-muted-foreground">
+                                Coming Soon
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        {isPrimary && (
+                          <Badge variant="destructive" className="bg-accent text-accent-foreground">
+                            Most Popular
+                          </Badge>
+                        )}
+                      </div>
+                      
+                      <p className="text-sm text-muted-foreground leading-relaxed text-left">
+                        {visa.description}
+                      </p>
+                      
+                      <div className="flex items-center justify-between pt-4 border-t border-border">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Clock className="w-4 h-4" />
+                          {processingTime}
+                        </div>
+                        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                          <DollarSign className="w-4 h-4" />
+                          {fee}
                         </div>
                       </div>
-                      {isPrimary && (
-                        <Badge variant="destructive" className="bg-accent text-accent-foreground">
-                          Most Popular
-                        </Badge>
-                      )}
-                    </div>
-                    
-                    <p className="text-sm text-muted-foreground leading-relaxed text-left">
-                      {visa.description}
-                    </p>
-                    
-                    <div className="flex items-center justify-between pt-4 border-t border-border">
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Clock className="w-4 h-4" />
-                        {visa.processingTime}
-                      </div>
-                      <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                        <DollarSign className="w-4 h-4" />
-                        {visa.fee}
-                      </div>
-                    </div>
                   </div>
-                </Button>
-              );
-            })}
+                  </Button>
+                );
+              })
+            )}
           </div>
 
           <div className="flex justify-center">
